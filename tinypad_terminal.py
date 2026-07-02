@@ -52,6 +52,9 @@ _MULTI_CMT = { 'js':('/*','*/'), 'php':('/*','*/'), 'c':('/*','*/'),
 _NORMAL=1; _KEYWORD=2; _STRING=3; _COMMENT=4; _NUMBER=5
 _LINENUM=6; _HEADER=7; _STATUS=8; _HILIGHT=9; _SPECIAL=10; _DIM=11
 
+_SCROLL_UP   = getattr(curses, 'BUTTON4_PRESSED', 0)
+_SCROLL_DOWN = getattr(curses, 'BUTTON5_PRESSED', 2097152)
+
 SHORTCUTS = [
     ('^X','Exit'), ('^O','Save'), ('^W','Find'), ('^N','Next'),
     ('^K','Cut Ln'), ('^U','Paste'), ('^Z','Undo'), ('^R','Redo'),
@@ -142,6 +145,8 @@ class Editor:
         self.redo_stack: list = []
         self.search    = ''
         self.lang      = ''
+        self.sel_anchor: tuple | None = None  # (cy, cx) where drag started
+        self._mouse_down = False
         self._in_multi_comment = False
         self._init_colors()
         if filename:
@@ -243,6 +248,49 @@ class Editor:
         title = (left + ' ' * gap + right)[:self.W]
         self._safe(0, 0, title.ljust(self.W), curses.color_pair(_HEADER) | curses.A_BOLD)
 
+    def _sel_range(self):
+        """Return (sy, sx, ey, ex) normalized, or None if no selection."""
+        if self.sel_anchor is None: return None
+        ay, ax = self.sel_anchor
+        by, bx = self.cy, self.cx
+        if (ay, ax) == (by, bx): return None
+        if (ay, ax) < (by, bx): return ay, ax, by, bx
+        return by, bx, ay, ax
+
+    def _sel_text(self):
+        r = self._sel_range()
+        if not r: return ''
+        sy, sx, ey, ex = r
+        if sy == ey: return self.lines[sy][sx:ex]
+        parts = [self.lines[sy][sx:]] + self.lines[sy+1:ey] + [self.lines[ey][:ex]]
+        return '\n'.join(parts)
+
+    def _delete_sel(self):
+        """Delete selected text. Returns True if there was a selection."""
+        r = self._sel_range()
+        if not r: return False
+        self._snapshot()
+        sy, sx, ey, ex = r
+        if sy == ey:
+            self.lines[sy] = self.lines[sy][:sx] + self.lines[sy][ex:]
+        else:
+            self.lines[sy] = self.lines[sy][:sx] + self.lines[ey][ex:]
+            del self.lines[sy+1:ey+1]
+        if not self.lines: self.lines = ['']
+        self.cy, self.cx = sy, sx
+        self.sel_anchor = None
+        self.modified = True
+        self._clamp()
+        return True
+
+    def _sel_for_row(self, row):
+        """Return (sc, ec) selection column range on this row, or None."""
+        r = self._sel_range()
+        if not r: return None
+        sy, sx, ey, ex = r
+        if row < sy or row > ey: return None
+        return (sx if row == sy else 0), (ex if row == ey else len(self.lines[row]) + 1)
+
     def _draw_body(self):
         lw = self.lnum_w
         ew = self.edit_w
@@ -260,19 +308,27 @@ class Editor:
             # Content
             line    = self.lines[docrow]
             visible = line[self.left : self.left + ew]
-            if not self.lang:
-                self._safe(y, lw, visible, curses.color_pair(_NORMAL))
-            else:
-                cmap = _colormap(line, self.lang)
-                x = lw
-                for ci in range(self.left, min(self.left + ew, len(line))):
+            sel     = self._sel_for_row(docrow)
+            cmap    = _colormap(line, self.lang) if self.lang else None
+            x = lw
+            for ci in range(self.left, min(self.left + ew, len(line))):
+                ch = line[ci]
+                if cmap:
                     pair, bold = cmap[ci]
-                    ch = line[ci]
-                    try: self.scr.addch(y, x, ch, curses.color_pair(pair) | bold)
-                    except curses.error: pass
-                    x += 1
-            # Search highlights
-            if self.search:
+                else:
+                    pair, bold = _NORMAL, 0
+                attr = curses.color_pair(pair) | bold
+                if sel and sel[0] <= ci < sel[1]:
+                    attr = curses.color_pair(_HILIGHT) | curses.A_BOLD
+                try: self.scr.addch(y, x, ch, attr)
+                except curses.error: pass
+                x += 1
+            # Pad rest of line with selection color if selection extends to EOL
+            if sel and sel[0] <= len(line) < sel[1] and x < self.W:
+                try: self.scr.addch(y, x, ' ', curses.color_pair(_HILIGHT))
+                except curses.error: pass
+            # Search highlights (on top of everything)
+            if self.search and not self._sel_range():
                 pat = re.compile(re.escape(self.search), re.IGNORECASE)
                 for m in pat.finditer(visible):
                     hx = lw + m.start()
@@ -577,81 +633,122 @@ class Editor:
             if key == curses.KEY_MOUSE:
                 try:
                     _, mx, my, _, bs = curses.getmouse()
-                    if 1 <= my <= self.editor_h:
-                        self.cy = self.top + my - 1
-                        self.cx = self.left + max(0, mx - self.lnum_w)
-                        self._clamp()
-                    if bs & curses.BUTTON4_PRESSED: self._page(False)
-                    elif bs & curses.BUTTON5_PRESSED: self._page(True)
+                    if _SCROLL_UP   and bs & _SCROLL_UP:   self._page(False)
+                    elif _SCROLL_DOWN and bs & _SCROLL_DOWN: self._page(True)
+                    elif 1 <= my <= self.editor_h:
+                        ny = self.top + my - 1
+                        nx = self.left + max(0, mx - self.lnum_w)
+                        ny = max(0, min(ny, len(self.lines)-1))
+                        nx = max(0, min(nx, len(self.lines[ny])))
+                        if bs & curses.BUTTON1_PRESSED:
+                            # Start fresh selection anchor
+                            self.sel_anchor  = (ny, nx)
+                            self._mouse_down = True
+                            self.cy, self.cx = ny, nx
+                            self._clamp()
+                        elif bs & curses.REPORT_MOUSE_POSITION and self._mouse_down:
+                            # Dragging — extend selection
+                            self.cy, self.cx = ny, nx
+                            self._clamp()
+                        elif bs & curses.BUTTON1_RELEASED:
+                            self._mouse_down = False
+                            self.cy, self.cx = ny, nx
+                            self._clamp()
+                            # If anchor == cursor, it was just a click — clear selection
+                            if self.sel_anchor == (self.cy, self.cx):
+                                self.sel_anchor = None
                 except curses.error: pass
                 continue
 
             if key == curses.KEY_RESIZE:
                 curses.update_lines_cols(); self._clamp(); continue
 
-            # ── Arrow / nav keys ──────────────────────────────────────────
-            if   key == curses.KEY_UP:     self._move(-1, 0)
-            elif key == curses.KEY_DOWN:   self._move(1, 0)
-            elif key == curses.KEY_LEFT:   self._move(0, -1)
-            elif key == curses.KEY_RIGHT:  self._move(0, 1)
+            # ── Arrow / nav keys (clear selection) ───────────────────────
+            if   key == curses.KEY_UP:
+                self.sel_anchor = None; self._move(-1, 0)
+            elif key == curses.KEY_DOWN:
+                self.sel_anchor = None; self._move(1, 0)
+            elif key == curses.KEY_LEFT:
+                self.sel_anchor = None; self._move(0, -1)
+            elif key == curses.KEY_RIGHT:
+                self.sel_anchor = None; self._move(0, 1)
             elif key == curses.KEY_HOME:
-                self.cx = 0; self._clamp()
+                self.sel_anchor = None; self.cx = 0; self._clamp()
             elif key == curses.KEY_END:
-                self.cx = len(self.lines[self.cy]); self._clamp()
-            elif key == curses.KEY_PPAGE:  self._page(False)
-            elif key == curses.KEY_NPAGE:  self._page(True)
-            elif key == curses.KEY_DC:     self._delete_char()
-            elif key in (curses.KEY_BACKSPACE, 127, 8): self._backspace()
+                self.sel_anchor = None; self.cx = len(self.lines[self.cy]); self._clamp()
+            elif key == curses.KEY_PPAGE:
+                self.sel_anchor = None; self._page(False)
+            elif key == curses.KEY_NPAGE:
+                self.sel_anchor = None; self._page(True)
+            elif key == curses.KEY_DC:
+                if not self._delete_sel(): self._delete_char()
+            elif key in (curses.KEY_BACKSPACE, 127, 8):
+                if not self._delete_sel(): self._backspace()
 
-            # Ctrl+Left / Ctrl+Right (terminal-dependent codes)
-            elif key in (545, 546, 544):   self._move_word(False)
-            elif key in (560, 561, 559):   self._move_word(True)
+            # Ctrl+Left / Ctrl+Right
+            elif key in (545, 546, 544):
+                self.sel_anchor = None; self._move_word(False)
+            elif key in (560, 561, 559):
+                self.sel_anchor = None; self._move_word(True)
 
             # ── Ctrl keys ─────────────────────────────────────────────────
-            elif key == 1:   # ^A — line start
-                self.cx = 0; self._clamp()
+            elif key == 1:   # ^A — select all
+                self.sel_anchor = (0, 0)
+                self.cy = len(self.lines)-1; self.cx = len(self.lines[-1]); self._clamp()
             elif key == 5:   # ^E — line end
-                self.cx = len(self.lines[self.cy]); self._clamp()
+                self.sel_anchor = None; self.cx = len(self.lines[self.cy]); self._clamp()
             elif key == 20:  # ^T — file end
+                self.sel_anchor = None
                 self.cy = len(self.lines)-1; self.cx = len(self.lines[self.cy]); self._clamp()
-            elif key == 25:  # ^Y — page up (nano compat)
-                self._page(False)
-            elif key == 22:  # ^V — page down (nano compat)
-                self._page(True)
+            elif key == 25:  # ^Y — page up
+                self.sel_anchor = None; self._page(False)
+            elif key == 22:  # ^V — page down
+                self.sel_anchor = None; self._page(True)
             elif key == 23:  # ^W — find
-                self._search_dialog()
+                self.sel_anchor = None; self._search_dialog()
             elif key == 14:  # ^N — find next
                 self._find_next()
             elif key == 16:  # ^P — find previous
                 self._find_next(backward=True)
             elif key == 15:  # ^O — save
                 self._save()
-            elif key == 24:  # ^X — exit
-                if self._quit(): break
+            elif key == 24:  # ^X — cut selection or exit
+                if self._sel_range():
+                    txt = self._sel_text()
+                    self.clipboard = txt.splitlines() or ['']
+                    self._delete_sel()
+                    self.message = f'Cut {len(txt)} char(s).'
+                else:
+                    if self._quit(): break
+            elif key == 3:   # ^C — copy selection or show position
+                if self._sel_range():
+                    txt = self._sel_text()
+                    self.clipboard = txt.splitlines() or ['']
+                    self.message = f'Copied {len(txt)} char(s).'
+                else:
+                    total = len(self.lines)
+                    chars = sum(len(l) for l in self.lines)
+                    self.message = f'Ln {self.cy+1}/{total}  Col {self.cx+1}  {chars:,} chars  {self.lang or "text"}'
             elif key == 26:  # ^Z — undo
-                self._undo()
+                self.sel_anchor = None; self._undo()
             elif key == 18:  # ^R — redo
-                self._redo()
+                self.sel_anchor = None; self._redo()
             elif key == 11:  # ^K — cut line
-                self._cut_line()
+                self.sel_anchor = None; self._cut_line()
             elif key == 21:  # ^U — paste
                 self._paste()
             elif key == 4:   # ^D — duplicate line
                 self._duplicate_line()
             elif key == 7:   # ^G — help
                 self._help()
-            elif key == 3:   # ^C — position info
-                total = len(self.lines)
-                chars = sum(len(l) for l in self.lines)
-                self.message = f'Ln {self.cy+1}/{total}  Col {self.cx+1}  {chars:,} chars  {self.lang or "text"}'
             elif key in (28, 47):  # ^\ or / — go to line
                 self._goto_line()
             elif key == 9:   # Tab
-                self._tab()
+                self._delete_sel(); self._tab()
             elif key in (10, 13):  # Enter
-                self._newline()
+                self._delete_sel(); self._newline()
             elif 32 <= key <= 126:
-                self._insert(chr(key))
+                self._delete_sel(); self._insert(chr(key))
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
