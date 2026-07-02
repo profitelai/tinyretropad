@@ -8,8 +8,47 @@ Usage:
     alias nano='python3 /path/to/tinypad_terminal.py'
 """
 
-import curses, os, sys, re
+import curses, os, sys, re, subprocess
 from datetime import datetime
+
+# ── System clipboard ─────────────────────────────────────────────────────────
+
+def _sys_copy(text):
+    """Write text to the OS clipboard (macOS + Linux X11/Wayland)."""
+    try:
+        if sys.platform == 'darwin':
+            subprocess.run(['pbcopy'], input=text.encode(), timeout=2)
+            return
+        for cmd in (['xclip', '-selection', 'clipboard'],
+                    ['xsel', '--clipboard', '--input'],
+                    ['wl-copy']):
+            try:
+                subprocess.run(cmd, input=text.encode(), timeout=2, check=True)
+                return
+            except (FileNotFoundError, subprocess.CalledProcessError,
+                    subprocess.TimeoutExpired):
+                pass
+    except Exception:
+        pass
+
+def _sys_paste():
+    """Read text from the OS clipboard. Returns '' on failure."""
+    try:
+        if sys.platform == 'darwin':
+            r = subprocess.run(['pbpaste'], capture_output=True, timeout=2)
+            return r.stdout.decode('utf-8', errors='replace')
+        for cmd in (['xclip', '-selection', 'clipboard', '-o'],
+                    ['xsel', '--clipboard', '--output'],
+                    ['wl-paste', '--no-newline']):
+            try:
+                r = subprocess.run(cmd, capture_output=True, timeout=2, check=True)
+                return r.stdout.decode('utf-8', errors='replace')
+            except (FileNotFoundError, subprocess.CalledProcessError,
+                    subprocess.TimeoutExpired):
+                pass
+    except Exception:
+        pass
+    return ''
 
 # ── Syntax definitions ───────────────────────────────────────────────────────
 
@@ -700,10 +739,8 @@ class Editor:
             elif key == 20:  # ^T — file end
                 self.sel_anchor = None
                 self.cy = len(self.lines)-1; self.cx = len(self.lines[self.cy]); self._clamp()
-            elif key == 25:  # ^Y — page up
+            elif key == 25:  # ^Y — page up (nano compat)
                 self.sel_anchor = None; self._page(False)
-            elif key == 22:  # ^V — page down
-                self.sel_anchor = None; self._page(True)
             elif key == 23:  # ^W — find
                 self.sel_anchor = None; self._search_dialog()
             elif key == 14:  # ^N — find next
@@ -716,19 +753,40 @@ class Editor:
                 if self._sel_range():
                     txt = self._sel_text()
                     self.clipboard = txt.splitlines() or ['']
+                    _sys_copy(txt)
                     self._delete_sel()
-                    self.message = f'Cut {len(txt)} char(s).'
+                    self.message = f'Cut {len(txt)} char(s) → system clipboard.'
                 else:
                     if self._quit(): break
             elif key == 3:   # ^C — copy selection or show position
                 if self._sel_range():
                     txt = self._sel_text()
                     self.clipboard = txt.splitlines() or ['']
-                    self.message = f'Copied {len(txt)} char(s).'
+                    _sys_copy(txt)
+                    self.message = f'Copied {len(txt)} char(s) → system clipboard.'
                 else:
                     total = len(self.lines)
                     chars = sum(len(l) for l in self.lines)
                     self.message = f'Ln {self.cy+1}/{total}  Col {self.cx+1}  {chars:,} chars  {self.lang or "text"}'
+            elif key == 22:  # ^V — paste from system clipboard
+                txt = _sys_paste()
+                if txt:
+                    self._delete_sel()
+                    self._snapshot()
+                    for i, part in enumerate(txt.splitlines()):
+                        if i == 0:
+                            self._insert(part)
+                        else:
+                            self._newline()
+                            # _newline adds auto-indent, insert remainder after it
+                            line = self.lines[self.cy]
+                            indent_len = len(line) - len(line.lstrip())
+                            self.lines[self.cy] = line[:indent_len] + part
+                            self.cx = indent_len + len(part)
+                    self.message = f'Pasted {len(txt)} char(s) from system clipboard.'
+                else:
+                    self.message = 'System clipboard is empty.'
+                continue
             elif key == 26:  # ^Z — undo
                 self.sel_anchor = None; self._undo()
             elif key == 18:  # ^R — redo
