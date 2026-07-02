@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, font as tkfont
-import os, sys
+import os, sys, re
 from datetime import datetime
 
 THEMES = {
@@ -22,6 +22,10 @@ class TinyRetroPad:
         self._find_start = "1.0"
         self._find_win = None
         self._replace_win = None
+        self._find_case = tk.BooleanVar(value=False)
+        self._find_regex = tk.BooleanVar(value=False)
+        self._find_word  = tk.BooleanVar(value=False)
+        self._find_wrap  = tk.BooleanVar(value=True)
         self.word_wrap      = tk.BooleanVar(value=True)
         self.show_statusbar = tk.BooleanVar(value=True)
         self.dark_mode      = tk.BooleanVar(value=False)
@@ -245,6 +249,38 @@ class TinyRetroPad:
     def _insert_datetime(self):
         self.text.insert(tk.INSERT, datetime.now().strftime("%I:%M %p %m/%d/%Y"))
 
+    def _search_options(self, parent, row=1):
+        """Render shared search option checkboxes. Returns the frame."""
+        f = tk.LabelFrame(parent, text="Options", padx=6, pady=4)
+        f.grid(row=row, column=0, columnspan=3, padx=10, pady=(0,6), sticky="ew")
+        tk.Checkbutton(f, text="Match case",  variable=self._find_case).pack(side=tk.LEFT, padx=6)
+        tk.Checkbutton(f, text="Whole word",  variable=self._find_word).pack(side=tk.LEFT, padx=6)
+        tk.Checkbutton(f, text="Regex",       variable=self._find_regex).pack(side=tk.LEFT, padx=6)
+        tk.Checkbutton(f, text="Wrap around", variable=self._find_wrap).pack(side=tk.LEFT, padx=6)
+        return f
+
+    def _build_pattern(self, query):
+        """Compile a re.Pattern from current query and option flags. Raises re.error on bad regex."""
+        flags = 0 if self._find_case.get() else re.IGNORECASE
+        if self._find_regex.get():
+            pat = re.compile(query, flags)
+        else:
+            escaped = re.escape(query)
+            if self._find_word.get():
+                escaped = rf"\b{escaped}\b"
+            pat = re.compile(escaped, flags)
+        return pat
+
+    def _find_all_matches(self, content, pat):
+        """Return list of (start_char, end_char) for every match in content."""
+        return [(m.start(), m.end()) for m in pat.finditer(content)]
+
+    def _char_to_index(self, content, char_pos):
+        """Convert absolute char offset in content to Tkinter 'line.col' index."""
+        line = content[:char_pos].count("\n") + 1
+        col  = char_pos - content[:char_pos].rfind("\n") - 1
+        return f"{line}.{col}"
+
     def _find_dialog(self):
         if self._find_win and self._find_win.winfo_exists():
             self._find_win.lift(); return
@@ -253,70 +289,136 @@ class TinyRetroPad:
         self._find_win = win
         tk.Label(win, text="Find:").grid(row=0, column=0, padx=10, pady=8, sticky="w")
         q_var = tk.StringVar(value=self._find_query)
-        q_ent = tk.Entry(win, textvariable=q_var, width=32)
-        q_ent.grid(row=0, column=1, padx=10, pady=8, columnspan=2)
+        q_ent = tk.Entry(win, textvariable=q_var, width=36)
+        q_ent.grid(row=0, column=1, padx=10, pady=8, columnspan=2, sticky="ew")
         q_ent.focus_set()
-        case_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(win, text="Match case", variable=case_var).grid(row=1, column=1, sticky="w")
+        self._search_options(win, row=1)
+        status = tk.Label(win, text="", anchor="w", fg="gray")
+        status.grid(row=3, column=0, columnspan=2, padx=10, sticky="w")
         def do_find():
-            self._find_query = q_var.get(); self._find_start = "1.0"
-            self._find_next(case=case_var.get())
-        tk.Button(win, text="Find Next", width=12, default=tk.ACTIVE, command=do_find).grid(row=1, column=2, padx=6, pady=4)
-        tk.Button(win, text="Cancel",    width=12, command=win.destroy).grid(row=2, column=2, padx=6, pady=4)
+            self._find_query = q_var.get()
+            self._find_start = "1.0"
+            self._find_next(status_label=status)
+        def do_find_all():
+            self._find_query = q_var.get()
+            self._highlight_all(status_label=status)
+        bf = tk.Frame(win)
+        bf.grid(row=3, column=2, padx=6, pady=4, sticky="e")
+        tk.Button(bf, text="Find Next", width=11, default=tk.ACTIVE, command=do_find).pack(pady=2)
+        tk.Button(bf, text="Find All",  width=11, command=do_find_all).pack(pady=2)
+        tk.Button(bf, text="Close",     width=11, command=win.destroy).pack(pady=2)
         win.bind("<Return>", lambda e: do_find())
         win.bind("<Escape>", lambda e: win.destroy())
 
-    def _find_next(self, case=False):
+    def _find_next(self, status_label=None):
         self.text.tag_remove("found", "1.0", tk.END)
         if not self._find_query: return
-        idx = self.text.search(self._find_query, self._find_start,
-                               stopindex=tk.END, nocase=not case)
-        if not idx:
-            if self._find_start != "1.0":
-                self._find_start = "1.0"; self._find_next(case); return
-            messagebox.showinfo("Find", f'"{self._find_query}" not found.', parent=self.root)
+        try:
+            pat = self._build_pattern(self._find_query)
+        except re.error as e:
+            messagebox.showerror("Regex Error", str(e), parent=self.root); return
+        content = self.text.get("1.0", tk.END+"-1c")
+        start_char = len(self.text.get("1.0", self._find_start+"-1c")) if self._find_start != "1.0" else 0
+        matches = self._find_all_matches(content, pat)
+        if not matches:
+            msg = "No matches found."
+            if status_label: status_label.config(text=msg)
+            else: messagebox.showinfo("Find", f'"{self._find_query}" not found.', parent=self.root)
             return
-        end = f"{idx}+{len(self._find_query)}c"
-        self.text.tag_add("found", idx, end)
+        # Find next match at or after current position
+        nxt = next((m for m in matches if m[0] >= start_char), None)
+        if nxt is None:
+            if self._find_wrap.get():
+                nxt = matches[0]
+                if status_label: status_label.config(text=f"Wrapped · {len(matches)} match(es)")
+            else:
+                msg = "No more matches."
+                if status_label: status_label.config(text=msg)
+                else: messagebox.showinfo("Find", msg, parent=self.root)
+                return
+        else:
+            if status_label: status_label.config(text=f"{len(matches)} match(es)")
+        idx  = self._char_to_index(content, nxt[0])
+        iend = self._char_to_index(content, nxt[1])
+        self.text.tag_add("found", idx, iend)
         self.text.see(idx)
         self.text.mark_set(tk.INSERT, idx)
-        self._find_start = end
+        self._find_start = iend
+
+    def _highlight_all(self, status_label=None):
+        self.text.tag_remove("found", "1.0", tk.END)
+        if not self._find_query: return
+        try:
+            pat = self._build_pattern(self._find_query)
+        except re.error as e:
+            messagebox.showerror("Regex Error", str(e), parent=self.root); return
+        content = self.text.get("1.0", tk.END+"-1c")
+        matches = self._find_all_matches(content, pat)
+        for s, e in matches:
+            self.text.tag_add("found", self._char_to_index(content, s), self._char_to_index(content, e))
+        msg = f"{len(matches)} match(es) highlighted" if matches else "No matches found."
+        if status_label: status_label.config(text=msg)
+        else: messagebox.showinfo("Find All", msg, parent=self.root)
+        if matches:
+            self.text.see(self._char_to_index(content, matches[0][0]))
 
     def _replace_dialog(self):
         if self._replace_win and self._replace_win.winfo_exists():
             self._replace_win.lift(); return
         win = tk.Toplevel(self.root)
-        win.title("Replace"); win.resizable(False, False); win.transient(self.root)
+        win.title("Find & Replace"); win.resizable(False, False); win.transient(self.root)
         self._replace_win = win
         tk.Label(win, text="Find:").grid(   row=0, column=0, padx=10, pady=6, sticky="w")
         tk.Label(win, text="Replace:").grid(row=1, column=0, padx=10, pady=6, sticky="w")
-        q_var, r_var = tk.StringVar(value=self._find_query), tk.StringVar()
-        q_ent = tk.Entry(win, textvariable=q_var, width=30)
-        r_ent = tk.Entry(win, textvariable=r_var, width=30)
-        q_ent.grid(row=0, column=1, columnspan=2, padx=10, pady=6)
-        r_ent.grid(row=1, column=1, columnspan=2, padx=10, pady=6)
-        q_ent.focus_set()
-        case_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(win, text="Match case", variable=case_var).grid(row=2, column=1, sticky="w")
+        q_var = tk.StringVar(value=self._find_query)
+        r_var = tk.StringVar()
+        tk.Entry(win, textvariable=q_var, width=36).grid(row=0, column=1, columnspan=2, padx=10, pady=6, sticky="ew")
+        tk.Entry(win, textvariable=r_var, width=36).grid(row=1, column=1, columnspan=2, padx=10, pady=6, sticky="ew")
+        tk.Label(win, text="  Tip: use \\1 \\2 for capture groups in Replace (Regex mode)",
+                 fg="gray", font=("", 9)).grid(row=2, column=0, columnspan=3, padx=10, sticky="w")
+        self._search_options(win, row=3)
+        status = tk.Label(win, text="", anchor="w", fg="gray")
+        status.grid(row=5, column=0, columnspan=2, padx=10, pady=(0,4), sticky="w")
+        win.grid_columnconfigure(1, weight=1)
         def do_replace_next():
-            self._find_query = q_var.get(); self._find_next(case=case_var.get())
+            self._find_query = q_var.get()
+            self._find_next(status_label=status)
             try:
-                s = self.text.index(tk.SEL_FIRST); e = self.text.index(tk.SEL_LAST)
-                self.text.delete(s, e); self.text.insert(s, r_var.get())
-            except tk.TclError: pass
+                pat = self._build_pattern(self._find_query)
+                s = self.text.index(tk.SEL_FIRST)
+                e = self.text.index(tk.SEL_LAST)
+                selected = self.text.get(s, e)
+                m = pat.fullmatch(selected)
+                replacement = m.expand(r_var.get()) if (m and self._find_regex.get()) else r_var.get()
+                self.text.delete(s, e)
+                self.text.insert(s, replacement)
+            except (tk.TclError, re.error): pass
         def do_replace_all():
             self._find_query = q_var.get()
+            try:
+                pat = self._build_pattern(self._find_query)
+            except re.error as e:
+                messagebox.showerror("Regex Error", str(e), parent=self.root); return
             content = self.text.get("1.0", tk.END+"-1c")
-            new = content.replace(self._find_query, r_var.get())
-            count = content.count(self._find_query)
-            self.text.delete("1.0", tk.END); self.text.insert("1.0", new)
-            messagebox.showinfo("Replace", f"{count} replacement(s) made.", parent=win)
+            try:
+                new, count = pat.subn(r_var.get(), content)
+            except re.error as e:
+                messagebox.showerror("Replace Error", str(e), parent=self.root); return
+            self.text.delete("1.0", tk.END)
+            self.text.insert("1.0", new)
+            status.config(text=f"{count} replacement(s) made.")
+        def do_find_all():
+            self._find_query = q_var.get()
+            self._highlight_all(status_label=status)
         bf = tk.Frame(win)
-        bf.grid(row=3, column=0, columnspan=3, pady=10, padx=8, sticky="e")
-        tk.Button(bf, text="Replace",     width=12, command=do_replace_next).pack(side=tk.LEFT, padx=4)
-        tk.Button(bf, text="Replace All", width=12, command=do_replace_all).pack(side=tk.LEFT, padx=4)
-        tk.Button(bf, text="Cancel",      width=12, command=win.destroy).pack(side=tk.LEFT, padx=4)
+        bf.grid(row=5, column=2, padx=6, pady=4, sticky="e")
+        tk.Button(bf, text="Find Next",   width=13, command=do_replace_next).pack(pady=2)
+        tk.Button(bf, text="Find All",    width=13, command=do_find_all).pack(pady=2)
+        tk.Button(bf, text="Replace",     width=13, command=do_replace_next).pack(pady=2)
+        tk.Button(bf, text="Replace All", width=13, command=do_replace_all).pack(pady=2)
+        tk.Button(bf, text="Close",       width=13, command=win.destroy).pack(pady=2)
         win.bind("<Escape>", lambda e: win.destroy())
+        q_var.focus_set()
 
     def _goto_dialog(self):
         total = int(self.text.index("end-1c").split(".")[0])
