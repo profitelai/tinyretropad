@@ -81,15 +81,26 @@ alias nano='python3 /path/to/tinypad_terminal.py'
 **Requirements:** Python 3.8+ — no external packages.
 
 ```bash
-# GUI version — install tkinter if missing
+# ── macOS ────────────────────────────────────────────────────────────────────
+# Check your Python version first:
+python3 --version   # e.g. Python 3.14.x
+
+# Install tkinter to match (Homebrew Python):
+brew install python-tk@3.14   # Python 3.14
+brew install python-tk@3.13   # Python 3.13
+brew install python-tk@3.12   # Python 3.12
+
+# Clipboard: pbcopy/pbpaste are built in — nothing to install.
+
+# ── Linux ────────────────────────────────────────────────────────────────────
+# GUI — install tkinter if missing:
 sudo apt install python3-tk        # Debian / Ubuntu
 sudo dnf install python3-tkinter   # Fedora
 sudo pacman -S tk                  # Arch
 
-# Terminal version — install system clipboard tool if needed
+# Terminal — install clipboard tool:
 sudo apt install xclip             # Linux X11
 sudo apt install wl-clipboard      # Linux Wayland
-# macOS: pbcopy/pbpaste built in, nothing to install
 ```
 
 ---
