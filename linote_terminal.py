@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-TinyRetroPad Terminal — nano replacement
+Linote Terminal — nano replacement
 Python 3 + curses · zero dependencies · Linux / macOS / SSH
 
 Usage:
@@ -281,7 +281,7 @@ class Editor:
         mod = ' [+]' if self.modified else ''
         name = os.path.basename(self.filename) if self.filename else 'New File'
         lang = f'  [{self.lang}]' if self.lang else ''
-        left  = f'  TinyRetroPad Terminal'
+        left  = f'  Linote Terminal'
         right = f'{name}{mod}{lang}  '
         gap   = max(1, self.W - len(left) - len(right))
         title = (left + ' ' * gap + right)[:self.W]
@@ -597,7 +597,7 @@ class Editor:
 
     def _help(self):
         lines = [
-            '  TinyRetroPad Terminal — Help',
+            '  Linote Terminal — Help',
             '',
             '  Navigation',
             '    Arrow keys       move cursor',

@@ -1,4 +1,4 @@
-# TinyRetroPad — Linux Edition
+# Linote — Linux Edition
 
 > A working, Notepad-style text editor in a single Python file. Two versions — pick your style.
 
@@ -13,13 +13,13 @@ Inspired by [PlummersSoftwareLLC/TinyRetroPad](https://github.com/PlummersSoftwa
 
 ## Two Versions
 
-### Version 1 — Desktop GUI (`tinyretropad.py`)
+### Version 1 — Desktop GUI (`linote.py`)
 
 A full graphical editor using Python's built-in `tkinter`. Requires a desktop environment (X11, Wayland, or macOS).
 
 ```bash
-python3 tinyretropad.py
-python3 tinyretropad.py myfile.txt
+python3 linote.py
+python3 linote.py myfile.txt
 ```
 
 ![GUI Editor](https://img.shields.io/badge/UI-Tkinter%20GUI-blue)
@@ -36,19 +36,19 @@ python3 tinyretropad.py myfile.txt
 
 ---
 
-### Version 2 — Terminal / Linux Editor (`tinypad_terminal.py`)
+### Version 2 — Terminal / Linux Editor (`linote_terminal.py`)
 
 A full terminal UI editor built with Python's built-in `curses`. Runs anywhere — no desktop needed. Works over SSH. **Replaces `nano`.**
 
 ```bash
-python3 tinypad_terminal.py
-python3 tinypad_terminal.py myfile.py
+python3 linote_terminal.py
+python3 linote_terminal.py myfile.py
 ```
 
 **To replace `nano` system-wide** — add to your `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-alias nano='python3 /path/to/tinypad_terminal.py'
+alias nano='python3 /path/to/linote_terminal.py'
 ```
 
 ![Terminal Editor](https://img.shields.io/badge/UI-Terminal%20TUI-green)
@@ -117,7 +117,7 @@ On macOS, `pbcopy`/`pbpaste` are built in — no install needed.
 
 | | Original (Windows x86 ASM) | GUI version | Terminal version |
 |---|---|---|---|
-| **File** | `TinyRetroPad.asm` | `tinyretropad.py` | `tinypad_terminal.py` |
+| **File** | `TinyRetroPad.asm` | `linote.py` | `linote_terminal.py` |
 | **Size** | ~2.5 KB compressed | ~22 KB | ~30 KB |
 | **Lines** | ~650 ASM lines | 457 Python lines | 700+ Python lines |
 | **Dependencies** | Windows API | Python stdlib | Python stdlib |
