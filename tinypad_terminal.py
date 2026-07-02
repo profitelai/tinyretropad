@@ -657,16 +657,14 @@ class Editor:
 
     def run(self):
         curses.curs_set(1)
+        curses.raw()          # capture Ctrl+C as key code 3, not SIGINT
         self.scr.keypad(True)
         try: curses.mousemask(curses.ALL_MOUSE_EVENTS | curses.REPORT_MOUSE_POSITION)
         except Exception: pass
 
         while True:
             self._draw()
-            try: key = self.scr.getch()
-            except KeyboardInterrupt:
-                if self._quit(): break
-                continue
+            key = self.scr.getch()
 
             # Mouse
             if key == curses.KEY_MOUSE:
@@ -693,9 +691,13 @@ class Editor:
                             self._mouse_down = False
                             self.cy, self.cx = ny, nx
                             self._clamp()
-                            # If anchor == cursor, it was just a click — clear selection
                             if self.sel_anchor == (self.cy, self.cx):
                                 self.sel_anchor = None
+                            elif self._sel_range():
+                                # Auto-copy selection to system clipboard on release
+                                txt = self._sel_text()
+                                _sys_copy(txt)
+                                self.message = f'Selected {len(txt)} char(s) → clipboard. Ctrl+V to paste anywhere.'
                 except curses.error: pass
                 continue
 
