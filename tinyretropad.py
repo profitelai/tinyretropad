@@ -11,8 +11,8 @@ THEMES = {
               "status_bg":"#007acc","status_fg":"#ffffff","find_bg":"#7b5600","cursor":"#aeafad"},
 }
 
-class Linote:
-    APP_NAME = "Linote"
+class TinyRetroPad:
+    APP_NAME = "TinyRetroPad"
 
     def __init__(self, root):
         self.root = root
@@ -83,7 +83,7 @@ class Linote:
         m.add_checkbutton(label="Dark Mode",  variable=self.dark_mode,      command=self._apply_theme)
         mb.add_cascade(label="View", menu=m)
         m = tk.Menu(mb, tearoff=0)
-        m.add_command(label="About Linote", command=self._about)
+        m.add_command(label="About TinyRetroPad", command=self._about)
         mb.add_cascade(label="Help", menu=m)
         self.root.config(menu=mb)
 
@@ -518,7 +518,7 @@ class Linote:
         messagebox.showinfo(f"About {self.APP_NAME}",
             f"{self.APP_NAME} — Linux Edition\n\n"
             "Notepad-style text editor · Python 3 + Tkinter · Zero dependencies\n"
-            "Inspired by PlummersSoftwareLLC/Linote (x86 ASM, ~2.5 KB)",
+            "Inspired by PlummersSoftwareLLC/TinyRetroPad (x86 ASM, ~2.5 KB)",
             parent=self.root)
 
     def _bind_shortcuts(self):
@@ -544,7 +544,7 @@ def main():
     root = tk.Tk()
     root.geometry("900x640")
     root.minsize(400, 300)
-    app = Linote(root)
+    app = TinyRetroPad(root)
     if len(sys.argv) > 1 and os.path.isfile(sys.argv[1]):
         app.current_file = sys.argv[1]
         try:
